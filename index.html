@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Book a time</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  /* Telegram fills these in, so the page matches the user's light/dark theme */
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 96px;
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  h1 { font-size: 22px; margin: 4px 0 16px; }
+  .step { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+  .label { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--hint); margin-bottom: 10px; }
+  input {
+    width: 100%; font: inherit; padding: 12px; border-radius: 10px;
+    border: 1px solid transparent; background: var(--bg); color: var(--text); outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button { font: inherit; border: 0; cursor: pointer; }
+
+  .days { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+  .days::-webkit-scrollbar { display: none; }
+  .day { flex: 0 0 auto; width: 58px; padding: 8px 0; text-align: center; border-radius: 12px; background: var(--bg); color: var(--text); }
+  .day small { display: block; font-size: 12px; color: var(--hint); }
+  .day b { display: block; font-size: 20px; }
+
+  .times { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .time { padding: 12px 0; border-radius: 10px; background: var(--bg); color: var(--text); font-weight: 600; }
+  .time:disabled { color: var(--hint); text-decoration: line-through; opacity: .6; cursor: default; }
+
+  .day.on, .time.on { background: var(--accent); color: var(--accent-text); }
+  .day.on small { color: inherit; opacity: .85; }
+  .note { color: var(--hint); font-size: 14px; }
+
+  /* Only used when the page is opened outside Telegram (for testing) */
+  #fallback {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; padding: 14px; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-weight: 600;
+  }
+  #fallback:disabled { opacity: .4; }
+
+  .done { text-align: center; padding-top: 48px; }
+  .done .big { font-size: 56px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<main id="form">
+  <h1>Book a time</h1>
+
+  <section class="step">
+    <div class="label">1 · Your name</div>
+    <input id="name" placeholder="Your name" autocomplete="name" maxlength="60">
+  </section>
+
+  <section class="step">
+    <div class="label">2 · Date</div>
+    <div class="days" id="days"><span class="note">Loading…</span></div>
+  </section>
+
+  <section class="step">
+    <div class="label">3 · What time are you free?</div>
+    <div id="times"><span class="note">Pick a date first.</span></div>
+  </section>
+
+  <button id="fallback" hidden disabled>Book</button>
+</main>
+
+<section id="done" class="done" hidden>
+  <div class="big">✅</div>
+  <h1>Booked!</h1>
+  <p id="doneText"></p>
+  <p class="note">We also sent the details to your Telegram chat.</p>
+</section>
+
+<script>
+// Your Apps Script web app URL (Deploy → Web app, ends with /exec)
+const API_URL = "https://script.google.com/macros/s/PASTE_YOUR_DEPLOYMENT_ID/exec";
+
+const tg = window.Telegram && Telegram.WebApp;
+const inTelegram = !!(tg && tg.initData);
+const state = { date: null, time: null, busy: false, done: false };
+const $ = id => document.getElementById(id);
+const fallback = $("fallback");
+
+if (tg) { tg.ready(); tg.expand(); }
+
+// Fill in the name from Telegram
+const user = inTelegram && tg.initDataUnsafe.user;
+if (user) $("name").value = [user.first_name, user.last_name].filter(Boolean).join(" ");
+
+function api(params) {
+  return fetch(API_URL + "?" + new URLSearchParams(params)).then(r => r.json());
+}
+
+function label(date, opts) {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", opts);
+}
+
+function show(msg) {
+  inTelegram ? tg.showAlert(msg) : alert(msg);
+}
+
+function haptic() {
+  try { if (inTelegram) tg.HapticFeedback.selectionChanged(); } catch (e) {}
+}
+
+// ---- Step 2: dates ----
+function loadDays() {
+  api({ action: "days" }).then(res => {
+    const box = $("days");
+    box.innerHTML = "";
+    if (!res.days || !res.days.length) {
+      box.innerHTML = '<span class="note">No dates available right now.</span>';
+      return;
+    }
+    res.days.forEach(date => {
+      const b = document.createElement("button");
+      b.className = "day";
+      b.innerHTML = `<small>${label(date, { weekday: "short" })}</small>` +
+                    `<b>${label(date, { day: "numeric" })}</b>` +
+                    `<small>${label(date, { month: "short" })}</small>`;
+      b.onclick = () => pickDate(date, b);
+      box.appendChild(b);
+    });
+  }).catch(() => {
+    $("days").innerHTML = '<span class="note">Could not load dates. Please reopen the page.</span>';
+  });
+}
+
+function pickDate(date, btn) {
+  document.querySelectorAll(".day").forEach(b => b.classList.toggle("on", b === btn));
+  haptic();
+  state.date = date;
+  state.time = null;
+  update();
+  loadTimes();
+}
+
+// ---- Step 3: free times ----
+function loadTimes() {
+  const date = state.date;
+  $("times").innerHTML = '<span class="note">Checking free times…</span>';
+  api({ action: "slots", date }).then(res => {
+    if (date !== state.date) return;   // the user already picked another day
+    const box = $("times");
+    box.innerHTML = "";
+    if (!res.slots || !res.slots.some(s => s.free)) {
+      box.innerHTML = '<span class="note">Fully booked — please try another day.</span>';
+      return;
+    }
+    const grid = document.createElement("div");
+    grid.className = "times";
+    res.slots.forEach(s => {
+      const b = document.createElement("button");
+      b.className = "time";
+      b.textContent = s.time;
+      b.disabled = !s.free;
+      b.onclick = () => {
+        grid.querySelectorAll(".time").forEach(x => x.classList.toggle("on", x === b));
+        haptic();
+        state.time = s.time;
+        update();
+      };
+      grid.appendChild(b);
+    });
+    box.appendChild(grid);
+  }).catch(() => {
+    if (date === state.date) $("times").innerHTML = '<span class="note">Could not load times. Tap the date again.</span>';
+  });
+}
+
+// ---- Book button (Telegram's own button at the bottom) ----
+function update() {
+  if (state.done) return;
+  const chosen = state.date && state.time;
+  const ready = chosen && $("name").value.trim() && !state.busy;
+  const text = chosen
+    ? `Book ${label(state.date, { weekday: "short", day: "numeric", month: "short" })} · ${state.time}`
+    : "Book";
+  if (inTelegram) {
+    tg.MainButton.setParams({ text, is_visible: !!chosen, is_active: !!ready });
+  } else {
+    fallback.hidden = false;
+    fallback.textContent = text;
+    fallback.disabled = !ready;
+  }
+}
+
+function book() {
+  if (state.busy || state.done) return;
+  const name = $("name").value.trim();
+  if (!name) return show("Please enter your name.");
+
+  state.busy = true;
+  update();
+  if (inTelegram) tg.MainButton.showProgress();
+
+  fetch(API_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      action: "book",
+      initData: inTelegram ? tg.initData : "",
+      name, date: state.date, time: state.time
+    })
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) return finish(res.when);
+      show(res.error || "Could not book, please try again.");
+      if (res.taken) { state.time = null; loadTimes(); }
+    })
+    .catch(() => show("Network problem — please try again."))
+    .finally(() => {
+      state.busy = false;
+      if (inTelegram) tg.MainButton.hideProgress();
+      update();
+    });
+}
+
+function finish(when) {
+  state.done = true;
+  $("form").hidden = true;
+  $("done").hidden = false;
+  $("doneText").textContent = when;
+  if (inTelegram) {
+    tg.HapticFeedback.notificationOccurred("success");
+    tg.MainButton.offClick(book);
+    tg.MainButton.setParams({ text: "Close", is_visible: true, is_active: true });
+    tg.MainButton.onClick(() => tg.close());
+  } else {
+    fallback.hidden = true;
+  }
+}
+
+$("name").addEventListener("input", update);
+if (inTelegram) tg.MainButton.onClick(book);
+fallback.onclick = book;
+loadDays();
+</script>
+</body>
+</html>
