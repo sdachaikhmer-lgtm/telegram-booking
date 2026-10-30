@@ -89,7 +89,7 @@
 
 <script>
 // Your Apps Script web app URL (Deploy → Web app, ends with /exec)
-const API_URL = "https://script.google.com/macros/s/PASTE_YOUR_DEPLOYMENT_ID/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzfqjxYV_aroHHIdQQPi25X_ZSAgkF86-6ZjDhu6hpNhXlaVE43otynluPyQ8_fWvHL_w/exec";
 
 const tg = window.Telegram && Telegram.WebApp;
 const inTelegram = !!(tg && tg.initData);
@@ -147,7 +147,7 @@ function pickDate(date, btn) {
   document.querySelectorAll(".day").forEach(b => b.classList.toggle("on", b === btn));
   haptic();
   state.date = date;
-  state.time = null;
+  state.time = null; 
   update();
   loadTimes();
 }
